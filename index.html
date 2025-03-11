@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Pneumonia Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <h2>Pneumonia Detection</h2>
+    <form id="upload-form">
+        <input type="file" id="file-input" name="file" required>
+        <button type="submit">Upload & Analyze</button>
+    </form>
+
+    <div id="status"></div>
+    <div class="progress-container">
+        <div class="progress-bar" id="progress-bar"></div>
+    </div>
+
+    <div id="result"></div>
+    <img id="heatmap" style="display:none; max-width:300px;">
+    <a id="download-report" style="display:none;" download>Download Report</a>
+
+    <script>
+        var socket = io();
+        var progressBar = document.getElementById("progress-bar");
+        var reportLink = document.getElementById("download-report");
+
+        document.getElementById("upload-form").onsubmit = function(e) {
+            e.preventDefault();
+            let fileInput = document.getElementById("file-input");
+            let file = fileInput.files[0];
+
+            let reader = new FileReader();
+            reader.onload = function(event) {
+                let data = {
+                    filename: file.name,
+                    file: event.target.result.split(',')[1]
+                };
+                progressBar.style.width = "10%";
+                socket.emit('upload_image', data);
+            };
+            reader.readAsDataURL(file);
+        };
+
+        socket.on('update_status', function(data) {
+            document.getElementById("status").innerText = data.message;
+
+            if (data.message.includes("Processing")) progressBar.style.width = "30%";
+            if (data.message.includes("Generating heatmap")) progressBar.style.width = "60%";
+        });
+
+        socket.on('prediction_result', function(data) {
+            document.getElementById("status").innerText = "Processing complete.";
+            progressBar.style.width = "100%";
+
+            document.getElementById("result").innerHTML = `
+                <p><b>Diagnosis:</b> ${data.prediction}</p>
+                <p><b>Confidence:</b> ${data.confidence.toFixed(2)}</p>
+                <p><b>Affected Area:</b> ${data.affected_percentage}%</p>
+            `;
+
+            if (data.heatmap) {
+                document.getElementById("heatmap").src = data.heatmap;
+                document.getElementById("heatmap").style.display = "block";
+            }
+
+            if (data.report) {
+                reportLink.href = `/download_report/${data.report.split('/').pop()}`;
+                reportLink.style.display = "block";
+                reportLink.innerText = "Download Report";
+            }
+
+            setTimeout(() => { progressBar.style.width = "0%"; }, 2000);
+        });
+    </script>
+
+    <style>
+        .progress-container {
+            width: 100%;
+            background-color: #f3f3f3;
+            border-radius: 5px;
+            margin-top: 10px;
+            height: 20px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background-color: #4caf50;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            border-radius: 5px;
+            transition: width 0.5s ease-in-out;
+        }
+
+        #download-report {
+            display: block;
+            margin-top: 10px;
+            font-size: 16px;
+            color: blue;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+    </style>
+</body>
+</html>
