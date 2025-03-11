@@ -38,37 +38,34 @@
         document.getElementById("upload-form").onsubmit = async function(event) {
             event.preventDefault();
             const formData = new FormData(this);
-            
+            const resultContainer = document.getElementById("result-container");
+
             // Show processing message
-            document.getElementById("result-container").style.display = "block";
-            document.getElementById("diagnosis").innerText = "Processing...";
-            document.getElementById("confidence").innerText = "";
-            document.getElementById("affected-area").innerText = "";
-            document.getElementById("heatmap").style.display = "none";
-            document.getElementById("report-link").style.display = "none";
+            resultContainer.style.display = "block";
+            resultContainer.innerHTML = "<p>Analyzing... Please wait.</p>";
 
-            const response = await fetch("/upload", {
-                method: "POST",
-                body: formData
-            });
+            try {
+                const response = await fetch("/upload", {
+                    method: "POST",
+                    body: formData
+                });
 
-            const data = await response.json();
+                if (!response.ok) throw new Error("Server error");
 
-            // Display results
-            document.getElementById("diagnosis").innerText = data.diagnosis;
-            document.getElementById("confidence").innerText = data.confidence;
-            document.getElementById("affected-area").innerText = data.affected_percentage;
+                const data = await response.json();
 
-            // Display heatmap if available
-            if (data.heatmap) {
-                document.getElementById("heatmap").src = data.heatmap;
-                document.getElementById("heatmap").style.display = "block";
-            }
-
-            // Display report download link
-            if (data.report) {
-                document.getElementById("report-link").href = "/download_report/" + data.report.split('/').pop();
-                document.getElementById("report-link").style.display = "block";
+                // Update UI with results
+                resultContainer.innerHTML = `
+                    <h2>Diagnosis Result</h2>
+                    <p><b>Diagnosis:</b> ${data.diagnosis}</p>
+                    <p><b>Confidence:</b> ${data.confidence}%</p>
+                    <p><b>Affected Area:</b> ${data.affected_percentage}%</p>
+                    ${data.heatmap ? `<img id="heatmap" src="${data.heatmap}" style="display: block; width: 300px;">` : ""}
+                    ${data.report ? `<a id="report-link" href="/download_report/${data.report.split('/').pop()}" download>Download Report</a>` : ""}
+                `;
+            } catch (error) {
+                resultContainer.innerHTML = "<p style='color: red;'>Error analyzing image. Please try again.</p>";
+                console.error("Error:", error);
             }
         };
     </script>
