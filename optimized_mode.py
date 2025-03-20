@@ -10,8 +10,8 @@ from keras.optimizers import Adam
 import tensorflow_addons as tfa
 
 # Enable Mixed Precision & XLA Optimization
-tf.keras.mixed_precision.set_global_policy("mixed_float16")
-tf.config.optimizer.set_jit(True)  # Enable XLA Compilation
+#tf.keras.mixed_precision.set_global_policy("mixed_float16")
+#tf.config.optimizer.set_jit(True)  # Enable XLA Compilation
 
 # Paths & Hyperparameters
 TRAIN_DIR = "chest_xray/train"
@@ -36,7 +36,7 @@ def parse_image(filename, label):
     img = tf.io.read_file(filename)
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.image.resize(img, IMG_SIZE)
-    img = tf.image.convert_image_dtype(img, tf.float16)  # Mixed precision
+    img = tf.image.convert_image_dtype(img, tf.uint8)  # Convert to uint8 for augmentation
     return img, label
 
 def load_dataset(directory, batch_size, augment=False):
@@ -54,8 +54,12 @@ def load_dataset(directory, batch_size, augment=False):
     dataset = dataset.map(parse_image, num_parallel_calls=tf.data.AUTOTUNE)
 
     if augment:
-        dataset = dataset.map(lambda x, y: (tf.numpy_function(lambda img: augmentations(image=img)["image"], [x], tf.float16), y),
-                              num_parallel_calls=tf.data.AUTOTUNE)
+        def augment_image(img, label):
+            img = tf.numpy_function(lambda x: augmentations(image=x)["image"], [img], tf.uint8)
+            img = tf.image.convert_image_dtype(img, tf.float32)  # Convert back to float32
+            return img, label
+
+        dataset = dataset.map(augment_image, num_parallel_calls=tf.data.AUTOTUNE)
 
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset
@@ -136,3 +140,27 @@ history_fine = model.fit(
 model.save("pneumonia_detection_efficientnetb5.h5")
 
 print("Optimized model training completed and saved as pneumonia_detection_efficientnetb5.h5!")
+
+def __getitem__(self, index):
+    batch_files = self.filenames[index * self.batch_size: (index + 1) * self.batch_size]
+    batch_labels = self.labels[index * self.batch_size: (index + 1) * self.batch_size]
+
+    images = []
+    labels = []
+
+    for file, label in zip(batch_files, batch_labels):
+        img = cv2.imread(file)
+        img = cv2.resize(img, self.img_size)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        img = img.astype(np.uint8)  # Ensure image is of type uint8 before augmentation
+
+        if self.augment:
+            img = augmentations(image=img)["image"]
+
+        img = img / 255.0  # Normalize to [0, 1]
+
+        images.append(img)
+        labels.append(label)
+
+    return np.array(images, dtype=np.float32), np.array(labels, dtype=np.float32)
