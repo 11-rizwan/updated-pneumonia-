@@ -18,7 +18,7 @@ TRAIN_DIR = "chest_xray/train"
 VAL_DIR = "chest_xray/val"
 IMG_SIZE = (380, 380)  # Reduced size for faster training
 BATCH_SIZE = 16
-EPOCHS = 50
+EPOCHS = 10
 INITIAL_LR = 5e-4  # Lowered for stable convergence
 
 # Data Augmentation using Albumentations
@@ -82,7 +82,7 @@ model = Model(inputs=base_model.input, outputs=x)
 
 # Learning Rate Scheduler
 def cosine_decay_with_warmup(epoch):
-    warmup_epochs = 5
+    warmup_epochs = 1
     if epoch < warmup_epochs:
         return (epoch + 1) / warmup_epochs * INITIAL_LR
     else:
