@@ -1,56 +1,42 @@
 import tensorflow as tf
 import numpy as np
-import albumentations as A
 import cv2
 import os
-from keras.applications import EfficientNetB7
+from keras.applications import EfficientNetV2S
 from keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from keras.models import Model
-from keras.optimizers import Adam
-import tensorflow_addons as tfa
+from keras.optimizers import AdamW
 from keras.utils import Sequence
-
-# Enable Mixed Precision for Faster Training
-tf.keras.mixed_precision.set_global_policy("mixed_float16")
 
 # Paths
 TRAIN_DIR = "chest_xray/train"
 VAL_DIR = "chest_xray/val"
-IMG_SIZE = (600, 600)  # Higher resolution for EfficientNetB7
-BATCH_SIZE = 16  # Reduce batch size to fit large model in memory
+IMG_SIZE = (384, 384)  # Optimized for EfficientNetV2-S
+BATCH_SIZE = 32  # Higher batch size for efficiency
 EPOCHS = 50
 INITIAL_LR = 1e-3
+WEIGHT_DECAY = 1e-4  # Weight decay for AdamW
 
-# Data Augmentation using Albumentations
-augmentations = A.Compose([
-    A.HorizontalFlip(p=0.5),
-    A.Rotate(limit=20, p=0.5),
-    A.RandomBrightnessContrast(p=0.3),
-    A.CLAHE(clip_limit=2, p=0.3),
-    A.CoarseDropout(max_holes=6, max_height=20, max_width=20, p=0.3),
-    A.GaussianBlur(p=0.2)
-])
-
-# Custom Data Generator
-class AugmentedDataGenerator(Sequence):
-    def __init__(self, directory, batch_size, img_size, augment=False):
+# Custom Data Generator (Without Mixed Precision, OpenCV-Compatible)
+class DataGenerator(Sequence):
+    def __init__(self, directory, batch_size, img_size, shuffle=True):
         self.directory = directory
         self.batch_size = batch_size
         self.img_size = img_size
-        self.augment = augment
-        self.class_labels = {"NORMAL": 0, "PNEUMONIA": 1}  # Define class labels
+        self.shuffle = shuffle
+        self.class_labels = {"NORMAL": 0, "PNEUMONIA": 1}
         self.filenames, self.labels = self._load_filenames()
+        if self.shuffle:
+            self.on_epoch_end()
 
     def _load_filenames(self):
-        filenames = []
-        labels = []
+        filenames, labels = [], []
         for label_name, label in self.class_labels.items():
             class_dir = os.path.join(self.directory, label_name)
             if not os.path.exists(class_dir):
                 continue
             for file in os.listdir(class_dir):
-                file_path = os.path.join(class_dir, file)
-                filenames.append(file_path)
+                filenames.append(os.path.join(class_dir, file))
                 labels.append(label)
         return filenames, labels
 
@@ -58,8 +44,8 @@ class AugmentedDataGenerator(Sequence):
         return len(self.filenames) // self.batch_size
 
     def __getitem__(self, index):
-        batch_files = self.filenames[index * self.batch_size: (index + 1) * self.batch_size]
-        batch_labels = self.labels[index * self.batch_size: (index + 1) * self.batch_size]
+        batch_files = self.filenames[index * self.batch_size:(index + 1) * self.batch_size]
+        batch_labels = self.labels[index * self.batch_size:(index + 1) * self.batch_size]
 
         images = []
         labels = []
@@ -68,31 +54,36 @@ class AugmentedDataGenerator(Sequence):
             img = cv2.imread(file)
             img = cv2.resize(img, self.img_size)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-            if self.augment:
-                img = augmentations(image=img)["image"]
-
-            img = img.astype(np.uint8)  # Ensure image is of type uint8
-            img = img / 255.0  # Normalize to [0, 1]
+            img = img.astype(np.float32) / 255.0  # Normalize & Ensure OpenCV Compatibility
 
             images.append(img)
             labels.append(label)
 
         return np.array(images, dtype=np.float32), np.array(labels, dtype=np.float32)
 
-# Load Data
-train_generator = AugmentedDataGenerator(TRAIN_DIR, BATCH_SIZE, IMG_SIZE, augment=True)
-val_generator = AugmentedDataGenerator(VAL_DIR, BATCH_SIZE, IMG_SIZE, augment=False)
+    def on_epoch_end(self):
+        if self.shuffle:
+            combined = list(zip(self.filenames, self.labels))
+            np.random.shuffle(combined)
+            self.filenames, self.labels = zip(*combined)
 
-# Load EfficientNetB7 Model
-base_model = EfficientNetB7(weights="imagenet", include_top=False, input_shape=(600, 600, 3))
+# Load Data
+train_generator = DataGenerator(TRAIN_DIR, BATCH_SIZE, IMG_SIZE, shuffle=True)
+val_generator = DataGenerator(VAL_DIR, BATCH_SIZE, IMG_SIZE, shuffle=False)
+
+# Load EfficientNetV2-S Model
+base_model = EfficientNetV2S(weights="imagenet", include_top=False, input_shape=(384, 384, 3))
 base_model.trainable = False  # Freeze base model initially
 
 # Custom Layers
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dense(512, activation="relu")(x)
-x = Dropout(0.4)(x)
-x = Dense(1, activation="sigmoid", dtype="float32")(x)
+x = Dense(256, activation="relu")(x)
+x = Dropout(0.3)(x)
+x = Dense(128, activation="relu")(x)
+x = Dropout(0.2)(x)
+x = Dense(64, activation="relu")(x)
+x = Dropout(0.1)(x)
+x = Dense(1, activation="sigmoid")(x)
 
 model = Model(inputs=base_model.input, outputs=x)
 
@@ -106,13 +97,13 @@ def cosine_decay_with_warmup(epoch):
 
 lr_scheduler = tf.keras.callbacks.LearningRateScheduler(cosine_decay_with_warmup)
 
-# Lookahead Optimizer with RAdam
-optimizer = tfa.optimizers.Lookahead(tfa.optimizers.RectifiedAdam(learning_rate=INITIAL_LR))
+# AdamW Optimizer
+optimizer = AdamW(learning_rate=INITIAL_LR, weight_decay=WEIGHT_DECAY)
 
 # Compile Model
 model.compile(
     optimizer=optimizer,
-    loss=tf.keras.losses.BinaryCrossentropy(label_smoothing=0.1),
+    loss=tf.keras.losses.BinaryCrossentropy(label_smoothing=0.05),
     metrics=["accuracy"]
 )
 
@@ -129,12 +120,12 @@ history = model.fit(
 
 # Unfreeze Base Model for Fine-Tuning
 base_model.trainable = True
-for layer in base_model.layers[:300]:  # Freeze first 300 layers
+for layer in base_model.layers[:150]:  # Freeze first 150 layers
     layer.trainable = False
 
 # Recompile with Lower LR
 model.compile(
-    optimizer=Adam(learning_rate=1e-4),
+    optimizer=AdamW(learning_rate=1e-4, weight_decay=WEIGHT_DECAY),
     loss="binary_crossentropy",
     metrics=["accuracy"]
 )
@@ -148,6 +139,6 @@ history_fine = model.fit(
 )
 
 # Save Model for Deployment
-model.save("pneumonia_detection_efficientnetb7.h5")
+model.save("pneumonia_detection_efficientnetv2s.h5")
 
-print("Model training completed and saved as pneumonia_detection_efficientnetb7.h5!")
+print("Model training completed and saved as pneumonia_detection_efficientnetv2s.h5!")
