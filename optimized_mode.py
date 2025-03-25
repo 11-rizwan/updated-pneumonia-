@@ -79,7 +79,7 @@ base_model.trainable = False  # Freeze base model initially
 
 # **Optimized Custom Layers**
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dense(256, activation="relu")(x)
+x = Dense(128, activation="relu")(x)
 x = Dropout(0.4)(x)
 x = Dense(128, activation="relu")(x)
 x = Dropout(0.3)(x)
