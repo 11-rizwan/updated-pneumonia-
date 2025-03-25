@@ -8,10 +8,6 @@ from keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from keras.models import Model
 from keras.optimizers import AdamW  # Replacing TFA optimizers
 
-# Enable Mixed Precision & XLA Optimization
-tf.keras.mixed_precision.set_global_policy("mixed_float16")
-tf.config.optimizer.set_jit(True)  # Enable XLA Compilation
-
 # Paths & Hyperparameters
 TRAIN_DIR = "chest_xray/train"
 VAL_DIR = "chest_xray/val"
@@ -35,7 +31,15 @@ def parse_image(filename, label):
     img = tf.io.read_file(filename)
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.image.resize(img, IMG_SIZE)
-    img = tf.image.convert_image_dtype(img, tf.float16)  # Mixed precision
+    img = tf.image.convert_image_dtype(img, tf.float32)  # Ensure proper format for Albumentations
+    return img, label
+
+def augment_image(img, label):
+    """Apply Albumentations and ensure dtype is correct."""
+    img = img.numpy()  # Convert Tensor to NumPy array
+    img = (img * 255).astype(np.uint8)  # Convert back to uint8 for Albumentations
+    img = augmentations(image=img)["image"]  # Apply augmentations
+    img = img.astype(np.float32) / 255.0  # Convert back to float32
     return img, label
 
 def load_dataset(directory, batch_size, augment=False):
@@ -53,7 +57,7 @@ def load_dataset(directory, batch_size, augment=False):
     dataset = dataset.map(parse_image, num_parallel_calls=tf.data.AUTOTUNE)
 
     if augment:
-        dataset = dataset.map(lambda x, y: (tf.numpy_function(lambda img: augmentations(image=img)["image"], [x], tf.float16), y),
+        dataset = dataset.map(lambda x, y: tf.py_function(augment_image, [x, y], [tf.float32, tf.int32]),
                               num_parallel_calls=tf.data.AUTOTUNE)
 
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
@@ -75,7 +79,7 @@ x = Dense(128, activation="relu")(x)
 x = Dropout(0.3)(x)
 x = Dense(64, activation="relu")(x)
 x = Dropout(0.2)(x)
-x = Dense(1, activation="sigmoid", dtype="float32")(x)  # Ensure float32 output
+x = Dense(1, activation="sigmoid")(x)  # Ensure float32 output
 
 model = Model(inputs=base_model.input, outputs=x)
 
@@ -89,7 +93,7 @@ def cosine_decay_with_warmup(epoch):
 
 lr_scheduler = tf.keras.callbacks.LearningRateScheduler(cosine_decay_with_warmup)
 
-# **Updated Optimizer: AdamW**
+# Updated Optimizer: AdamW
 optimizer = AdamW(learning_rate=INITIAL_LR, weight_decay=1e-4)  # Adaptive Weight Decay
 
 # Compile Model
