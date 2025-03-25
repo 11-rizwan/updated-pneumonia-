@@ -13,10 +13,10 @@ TRAIN_DIR = "chest_xray/train"
 VAL_DIR = "chest_xray/val"
 IMG_SIZE = (380, 380)
 BATCH_SIZE = 16
-EPOCHS = 50
+EPOCHS = 10
 INITIAL_LR = 5e-4  
 
-# Albumentations Data Augmentation (Updated)
+# Albumentations Data Augmentation (Fixed)
 augmentations = A.Compose([
     A.HorizontalFlip(p=0.5),
     A.Rotate(limit=20, p=0.5, border_mode=cv2.BORDER_REFLECT),
@@ -29,15 +29,15 @@ augmentations = A.Compose([
 # **Image Preprocessing Function**
 def parse_image(filename, label):
     img = tf.io.read_file(filename)
-    img = tf.image.decode_jpeg(img, channels=3)
+    img = tf.image.decode_jpeg(img, channels=3)  # Keep in uint8 format
     img = tf.image.resize(img, IMG_SIZE)
-    img = tf.image.convert_image_dtype(img, tf.float32)  # Ensure compatibility with Albumentations
+    img = tf.cast(img, tf.uint8)  # Ensure uint8 for OpenCV compatibility
     return img, label
 
 # **Albumentations Wrapper for TF**
 def augment_image(img, label):
-    img = img.numpy()  # Convert Tensor to NumPy array
-    img = (img * 255).astype(np.uint8)  # Convert to uint8 for OpenCV
+    img = img.numpy()  # Convert Tensor to NumPy
+    img = img.astype(np.uint8)  # Ensure it is uint8 before passing to OpenCV
     augmented = augmentations(image=img)["image"]  # Apply Albumentations
     augmented = augmented.astype(np.float32) / 255.0  # Convert back to float32
     return augmented, label
@@ -60,7 +60,7 @@ def load_dataset(directory, batch_size, augment=False):
     if augment:
         dataset = dataset.map(lambda x, y: tf.numpy_function(augment_image, [x, y], [tf.float32, tf.int32]),
                               num_parallel_calls=tf.data.AUTOTUNE)
-    
+
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset
 
@@ -80,13 +80,13 @@ x = Dense(128, activation="relu")(x)
 x = Dropout(0.3)(x)
 x = Dense(64, activation="relu")(x)
 x = Dropout(0.2)(x)
-x = Dense(1, activation="sigmoid")(x)  # Ensure float32 output
+x = Dense(1, activation="sigmoid")(x)  
 
 model = Model(inputs=base_model.input, outputs=x)
 
 # Learning Rate Scheduler
 def cosine_decay_with_warmup(epoch):
-    warmup_epochs = 5
+    warmup_epochs = 1
     if epoch < warmup_epochs:
         return (epoch + 1) / warmup_epochs * INITIAL_LR
     else:
